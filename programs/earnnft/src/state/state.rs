@@ -12,16 +12,12 @@ pub struct CollectionState {
 
 #[derive(Accounts)]
 pub struct CreateCollectionWithState<'info> {
-    // New collection account (must sign if not a PDA)
-    #[account(mut)]
-    pub collection: Signer<'info>,
-
-    // Payer for rent/compute
     #[account(mut)]
     pub payer: Signer<'info>,
 
-    // Update authority for collection and plugins
-    pub update_authority: Signer<'info>,
+    /// CHECK: This is the new collection being created.
+    #[account(mut)]
+    pub collection: Signer<'info>,
 
     #[account(
         init,
@@ -32,87 +28,98 @@ pub struct CreateCollectionWithState<'info> {
     )]
     pub state: Account<'info, CollectionState>,
 
-    // Metaplex Core program (validated at runtime)
-    pub mpl_core_program: UncheckedAccount<'info>,
+    /// CHECK: The update authority is just an address that will be assigned authority in the CPI.
+    pub update_authority: UncheckedAccount<'info>,
+
     pub system_program: Program<'info, System>,
+
+    /// CHECK: Validated against the Metaplex Core program ID in the instruction.
+    pub mpl_core_program: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]
 pub struct MintLockedAsset<'info> {
-    // New core asset (signer when not PDA)
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    /// CHECK: This is the new asset being created.
     #[account(mut)]
     pub asset: Signer<'info>,
-
-    // Existing collection (passed to CPI)
-    pub collection: UncheckedAccount<'info>,
-
-    // Intended owner of the minted asset
-    pub owner: UncheckedAccount<'info>,
 
     #[account(
         seeds = [b"state", collection.key().as_ref()],
         bump,
-        constraint = state.collection == collection.key() @ CustomError::StateCollectionMismatch,
-        constraint = state.update_authority == update_authority.key() @ CustomError::BadAuthority
+        has_one = collection,
+        has_one = update_authority
     )]
     pub state: Account<'info, CollectionState>,
 
-    #[account(mut)]
-    pub payer: Signer<'info>,
+    /// CHECK: The collection account is validated by the `state` PDA.
+    pub collection: UncheckedAccount<'info>,
 
     pub update_authority: Signer<'info>,
 
-    // Metaplex Core program (validated at runtime)
-    pub mpl_core_program: UncheckedAccount<'info>,
+    /// CHECK: The intended owner of the new asset.
+    pub owner: UncheckedAccount<'info>,
+
     pub system_program: Program<'info, System>,
+
+    /// CHECK: Validated against the Metaplex Core program ID in the instruction.
+    pub mpl_core_program: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]
 pub struct UnlockAsset<'info> {
-    // Core asset updated by CPI; must be writable
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    /// CHECK: This is the asset being modified by the CPI.
     #[account(mut)]
     pub asset: UncheckedAccount<'info>,
 
-    // Collection bound to state
+    /// CHECK: The collection account is needed to derive and validate the state PDA.
     pub collection: UncheckedAccount<'info>,
 
     #[account(
         seeds = [b"state", collection.key().as_ref()],
         bump,
-        constraint = state.collection == collection.key() @ CustomError::StateCollectionMismatch,
-        constraint = state.update_authority == update_authority.key() @ CustomError::BadAuthority
+        has_one = update_authority,
+        has_one = collection
     )]
     pub state: Account<'info, CollectionState>,
 
-    #[account(mut)]
-    pub payer: Signer<'info>,
     pub update_authority: Signer<'info>,
 
-    // Metaplex Core program (validated at runtime)
-    pub mpl_core_program: UncheckedAccount<'info>,
     pub system_program: Program<'info, System>,
+
+    /// CHECK: Validated against the Metaplex Core program ID in the instruction.
+    pub mpl_core_program: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]
 pub struct AddPlugin<'info> {
-    // Asset that will receive the plugin; must be writable for CPI
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    /// CHECK: This is the asset being modified by the CPI.
     #[account(mut)]
     pub asset: UncheckedAccount<'info>,
+
+    /// CHECK: The collection account is needed to derive and validate the state PDA.
     pub collection: UncheckedAccount<'info>,
 
     #[account(
         seeds = [b"state", collection.key().as_ref()],
         bump,
-        constraint = state.collection == collection.key() @ CustomError::StateCollectionMismatch,
-        constraint = state.update_authority == update_authority.key() @ CustomError::BadAuthority
+        has_one = update_authority,
+        has_one = collection
     )]
     pub state: Account<'info, CollectionState>,
 
-    #[account(mut)]
-    pub payer: Signer<'info>,
     pub update_authority: Signer<'info>,
 
-    // Metaplex Core program (validated at runtime)
-    pub mpl_core_program: UncheckedAccount<'info>,
     pub system_program: Program<'info, System>,
+
+    /// CHECK: Validated against the Metaplex Core program ID in the instruction.
+    pub mpl_core_program: UncheckedAccount<'info>,
 }
