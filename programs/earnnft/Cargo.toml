@@ -1,0 +1,25 @@
+[package]
+name = "earnnft"
+version = "0.1.0"
+description = "Created with Anchor"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "earnnft"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build"]
+
+
+[dependencies]
+anchor-lang = "0.30.1"
+
+# use version 0.7.0 to be compatible with anchor-lang 0.30.1 and other rust/solana deps
+mpl-core = { version = "0.7.0", features = ["anchor"] }
+
