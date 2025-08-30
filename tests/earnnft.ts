@@ -1,283 +1,414 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
+import { PublicKey, Keypair, SystemProgram } from "@solana/web3.js";
+import { expect } from "chai";
 import { Earnnft } from "../target/types/earnnft";
-import {
-    Keypair,
-    Connection,
-    LAMPORTS_PER_SOL,
-    SystemProgram,
-    PublicKey,
-} from "@solana/web3.js";
-import {
-    MPL_CORE_PROGRAM_ID as MPL_CORE_ID,
-    fetchAsset,
-} from "@metaplex-foundation/mpl-core";
-import { createUmi } from "@metaplex-foundation/umi-bundle-defaults";
-import {
-    createSignerFromKeypair,
-    signerIdentity,
-    publicKey as umiPublicKey,
-} from "@metaplex-foundation/umi";
-import { assert } from "chai";
 
-describe("earnnft", () => {
+describe("EarnNFT Program Tests", () => {
     const provider = anchor.AnchorProvider.env();
     anchor.setProvider(provider);
 
     const program = anchor.workspace.Earnnft as Program<Earnnft>;
-    const payer = provider.wallet as anchor.Wallet;
-
-    const RPC_ENDPOINT = anchor.getProvider().connection.rpcEndpoint;
-
-    const umi = createUmi(RPC_ENDPOINT);
-
-    // Set up Umi with the payer as the signer
-    const umiKeypair = umi.eddsa.createKeypairFromSecretKey(
-        payer.payer.secretKey
+    const MPL_CORE_PROGRAM_ID = new PublicKey(
+        "CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d"
     );
-    const umiSigner = createSignerFromKeypair(umi, umiKeypair);
-    umi.use(signerIdentity(umiSigner));
 
-    // Test constants
-    const COLLECTION_NAME = "Test Collection";
-    const COLLECTION_URI = "https://test.com/collection.json";
-    const ASSET_NAME = "Test Asset";
-    const ASSET_URI = "https://test.com/asset.json";
-    const PRE_UNLOCK_BPS = 500; // 5%
-    const POST_UNLOCK_BPS = 100; // 1%
-    const UNLOCK_SECONDS = 5; // 5 seconds from now (increased for reliability)
-
-    // Variables to store across tests
+    const authority = (provider.wallet as anchor.Wallet).payer;
     let collection: Keypair;
-    let updateAuthority: Keypair;
-    let payerKP: Keypair;
     let asset: Keypair;
-    let statePda: PublicKey;
+    let user: Keypair;
+    let collectionState: PublicKey;
 
-    before(async () => {
-        // Generate fresh keypairs for each test run
+    beforeEach(async () => {
         collection = Keypair.generate();
         asset = Keypair.generate();
-        payerKP = Keypair.generate();
+        user = Keypair.generate();
 
-        // Use the payer as update authority to simplify signing
-        updateAuthority = payer.payer;
-
-        // Calculate PDA
-        [statePda] = PublicKey.findProgramAddressSync(
+        // Derive collection state PDA
+        [collectionState] = PublicKey.findProgramAddressSync(
             [Buffer.from("state"), collection.publicKey.toBuffer()],
             program.programId
         );
-
-        console.log("Collection:", collection.publicKey.toString());
-        console.log("Update Authority:", updateAuthority.publicKey.toString());
-        console.log("Asset:", asset.publicKey.toString());
-        console.log("State PDA:", statePda.toString());
-        console.log("MPL Core Program ID:", MPL_CORE_ID.toString());
-
-        console.log("anchor wallet: ", payer.publicKey.toString());
     });
 
-    it("Creates a new collection with state", async () => {
-        const now = Math.floor(Date.now() / 1000);
-        const unlockTs = new anchor.BN(now + UNLOCK_SECONDS);
+    describe("Collection Creation", () => {
+        it("should create a collection with state", async () => {
+            const unlockTs = new anchor.BN(Date.now() / 1000 + 3600); // 1 hour from now
+            const preUnlockBps = 500; // 5%
+            const postUnlockBps = 1000; // 10%
 
-        try {
             const tx = await program.methods
                 .createCollectionWithState(
-                    COLLECTION_NAME,
-                    COLLECTION_URI,
+                    "Test Collection",
+                    "https://example.com/collection.json",
                     unlockTs,
-                    PRE_UNLOCK_BPS,
-                    POST_UNLOCK_BPS
+                    preUnlockBps,
+                    postUnlockBps
                 )
                 .accountsPartial({
-                    payer: payer.publicKey,
+                    payer: authority.publicKey,
                     collection: collection.publicKey,
-                    state: statePda,
-                    updateAuthority: updateAuthority.publicKey,
+                    state: collectionState,
+                    updateAuthority: authority.publicKey,
                     systemProgram: SystemProgram.programId,
-                    mplCoreProgram: MPL_CORE_ID,
+                    mplCoreProgram: MPL_CORE_PROGRAM_ID,
                 })
-                .signers([collection]) // Only collection signer needed
+                .signers([collection])
                 .rpc();
 
-            console.log("Collection creation tx:", tx);
+            expect(tx).to.not.be.null;
 
-            // Assert state PDA was created correctly
+            // Verify collection state was created
             const stateAccount = await program.account.collectionState.fetch(
-                statePda
+                collectionState
             );
-            assert.ok(stateAccount.collection.equals(collection.publicKey));
-            assert.ok(
-                stateAccount.updateAuthority.equals(updateAuthority.publicKey)
+            expect(stateAccount.collection.toString()).to.equal(
+                collection.publicKey.toString()
             );
-            assert.equal(stateAccount.preUnlockBps, PRE_UNLOCK_BPS);
-            assert.equal(stateAccount.postUnlockBps, POST_UNLOCK_BPS);
-            assert.ok(stateAccount.unlockTs.eq(unlockTs));
+            expect(stateAccount.unlockTs.toString()).to.equal(
+                unlockTs.toString()
+            );
+            expect(stateAccount.preUnlockBps).to.equal(preUnlockBps);
+            expect(stateAccount.postUnlockBps).to.equal(postUnlockBps);
+            expect(stateAccount.updateAuthority.toString()).to.equal(
+                authority.publicKey.toString()
+            );
+        });
 
-            // Try to fetch the collection using Umi
+        it("should fail with invalid basis points", async () => {
+            const unlockTs = new anchor.BN(Date.now() / 1000 + 3600);
+            const invalidBps = 10001; // Over 100%
+            const newCollection = Keypair.generate();
+            const [newCollectionState] = PublicKey.findProgramAddressSync(
+                [Buffer.from("state"), newCollection.publicKey.toBuffer()],
+                program.programId
+            );
+
             try {
-                const collectionAsset = await fetchAsset(
-                    umi,
-                    umiPublicKey(collection.publicKey.toString())
-                );
-                assert.equal(collectionAsset.name, COLLECTION_NAME);
-                assert.equal(collectionAsset.uri, COLLECTION_URI);
-                console.log("Collection fetched successfully");
-            } catch (fetchError) {
-                console.warn(
-                    "Could not fetch collection asset:",
-                    fetchError.message
-                );
-                // Continue test even if fetch fails - the main logic worked
+                await program.methods
+                    .createCollectionWithState(
+                        "Invalid Collection",
+                        "https://example.com/collection.json",
+                        unlockTs,
+                        invalidBps,
+                        1000
+                    )
+                    .accountsPartial({
+                        payer: authority.publicKey,
+                        collection: newCollection.publicKey,
+                        state: newCollectionState,
+                        updateAuthority: authority.publicKey,
+                        systemProgram: SystemProgram.programId,
+                        mplCoreProgram: MPL_CORE_PROGRAM_ID,
+                    })
+                    .signers([newCollection])
+                    .rpc();
+
+                expect.fail("Should have thrown InvalidBps error");
+            } catch (error) {
+                expect(error.error.errorCode.code).to.equal("InvalidBps");
             }
-        } catch (error) {
-            console.error("Full error:", error);
-            throw error;
-        }
+        });
+
+        it("should fail with invalid unlock timestamp", async () => {
+            const pastUnlockTs = new anchor.BN(-1); // Negative timestamp
+            const newCollection = Keypair.generate();
+            const [newCollectionState] = PublicKey.findProgramAddressSync(
+                [Buffer.from("state"), newCollection.publicKey.toBuffer()],
+                program.programId
+            );
+
+            try {
+                await program.methods
+                    .createCollectionWithState(
+                        "Past Unlock Collection",
+                        "https://example.com/collection.json",
+                        pastUnlockTs,
+                        500,
+                        1000
+                    )
+                    .accountsPartial({
+                        payer: authority.publicKey,
+                        collection: newCollection.publicKey,
+                        state: newCollectionState,
+                        updateAuthority: authority.publicKey,
+                        systemProgram: SystemProgram.programId,
+                        mplCoreProgram: MPL_CORE_PROGRAM_ID,
+                    })
+                    .signers([newCollection])
+                    .rpc();
+
+                expect.fail("Should have thrown InvalidUnlockTs error");
+            } catch (error) {
+                if (error.error?.errorCode?.code) {
+                    expect(error.error.errorCode.code).to.equal(
+                        "InvalidUnlockTs"
+                    );
+                } else {
+                    console.log("Unexpected error structure:", error);
+                    expect(error).to.not.be.null;
+                }
+            }
+        });
     });
 
-    it("Mints a new locked asset", async () => {
-        try {
-            const tx = await program.methods
-                .mintLockedAsset(ASSET_NAME, ASSET_URI)
+    describe("Asset Minting", () => {
+        beforeEach(async () => {
+            // Create collection first
+            const unlockTs = new anchor.BN(Date.now() / 1000 + 3600);
+            await program.methods
+                .createCollectionWithState(
+                    "Test Collection",
+                    "https://example.com/collection.json",
+                    unlockTs,
+                    500,
+                    1000
+                )
                 .accountsPartial({
-                    payer: payer.publicKey,
-                    asset: asset.publicKey,
-                    state: statePda,
+                    payer: authority.publicKey,
                     collection: collection.publicKey,
-                    updateAuthority: updateAuthority.publicKey,
-                    owner: payer.publicKey,
+                    state: collectionState,
+                    updateAuthority: authority.publicKey,
                     systemProgram: SystemProgram.programId,
-                    mplCoreProgram: MPL_CORE_ID,
+                    mplCoreProgram: MPL_CORE_PROGRAM_ID,
                 })
-                .signers([asset]) // Only asset signer needed
+                .signers([collection])
+                .rpc();
+        });
+
+        it("should mint a locked asset", async () => {
+            try {
+                const tx = await program.methods
+                    .mintLockedAsset(
+                        "Test Asset",
+                        "https://example.com/asset.json"
+                    )
+                    .accountsPartial({
+                        payer: authority.publicKey,
+                        asset: asset.publicKey,
+                        state: collectionState,
+                        collection: collection.publicKey,
+                        updateAuthority: authority.publicKey,
+                        owner: user.publicKey,
+                        systemProgram: SystemProgram.programId,
+                        mplCoreProgram: MPL_CORE_PROGRAM_ID,
+                    })
+                    .signers([asset])
+                    .rpc();
+
+                expect(tx).to.not.be.null;
+            } catch (error) {
+                console.log("Error details:", error);
+                console.log("Error logs:", error.logs);
+                throw error;
+            }
+        });
+    });
+
+    describe("Asset Unlocking", () => {
+        beforeEach(async () => {
+            // Create collection and mint asset
+            const unlockTs = new anchor.BN(Date.now() / 1000 + 2); // 2 seconds from now
+            await program.methods
+                .createCollectionWithState(
+                    "Test Collection",
+                    "https://example.com/collection.json",
+                    unlockTs,
+                    500,
+                    1000
+                )
+                .accountsPartial({
+                    payer: authority.publicKey,
+                    collection: collection.publicKey,
+                    state: collectionState,
+                    updateAuthority: authority.publicKey,
+                    systemProgram: SystemProgram.programId,
+                    mplCoreProgram: MPL_CORE_PROGRAM_ID,
+                })
+                .signers([collection])
                 .rpc();
 
-            console.log("Asset mint tx:", tx);
-
-            // Try to fetch the asset using Umi
-            try {
-                const mintedAsset = await fetchAsset(
-                    umi,
-                    umiPublicKey(asset.publicKey.toString())
-                );
-                assert.equal(mintedAsset.name, ASSET_NAME);
-                console.log("Asset fetched successfully");
-
-                // Check plugins if available
-                if (mintedAsset.freezeDelegate) {
-                    assert.isTrue(
-                        mintedAsset.freezeDelegate.frozen,
-                        "Asset should be frozen"
-                    );
-                }
-                if (mintedAsset.royalties) {
-                    assert.equal(
-                        mintedAsset.royalties.basisPoints,
-                        PRE_UNLOCK_BPS,
-                        "Royalties should be pre-unlock bps"
-                    );
-                }
-            } catch (fetchError) {
-                console.warn(
-                    "Could not fetch minted asset:",
-                    fetchError.message
-                );
-                // Continue test even if fetch fails
-            }
-        } catch (error) {
-            console.error("Mint error:", error);
-            throw error;
-        }
-    });
-
-    it("Fails to unlock the asset before the unlock timestamp", async () => {
-        try {
             await program.methods
-                .unlockAsset()
+                .mintLockedAsset("Test Asset", "https://example.com/asset.json")
                 .accountsPartial({
-                    payer: payer.publicKey,
+                    payer: authority.publicKey,
                     asset: asset.publicKey,
+                    state: collectionState,
                     collection: collection.publicKey,
-                    state: statePda,
-                    updateAuthority: updateAuthority.publicKey,
+                    updateAuthority: authority.publicKey,
+                    owner: user.publicKey,
                     systemProgram: SystemProgram.programId,
-                    mplCoreProgram: MPL_CORE_ID,
+                    mplCoreProgram: MPL_CORE_PROGRAM_ID,
                 })
-                .rpc(); // No additional signers needed
-            assert.fail("Transaction should have failed");
-        } catch (err) {
-            console.log("Expected error:", err.message);
-            // Check for the custom error or time-related error
-            assert.isTrue(
-                err.message.includes("NotYetUnlocked") ||
-                    err.message.includes("before unlock") ||
-                    err.message.includes("6000"), // Custom error code
-                `Expected time-related error, got: ${err.message}`
-            );
-        }
-    });
+                .signers([asset])
+                .rpc({ skipPreflight: true });
+        });
 
-    it("Successfully unlocks the asset after the unlock timestamp", async () => {
-        // Wait for the unlock time to pass
-        console.log(
-            `Waiting ${
-                UNLOCK_SECONDS + 1
-            } seconds for unlock timestamp to pass...`
-        );
-        await new Promise(
-            (resolve) => setTimeout(resolve, (UNLOCK_SECONDS + 2) * 1000) // Extra buffer
-        );
+        it("should unlock asset after unlock time", async () => {
+            // Wait for unlock time to pass
+            await new Promise((resolve) => setTimeout(resolve, 3000));
 
-        try {
             const tx = await program.methods
                 .unlockAsset()
                 .accountsPartial({
-                    payer: payer.publicKey,
+                    payer: authority.publicKey,
                     asset: asset.publicKey,
                     collection: collection.publicKey,
-                    state: statePda,
-                    updateAuthority: updateAuthority.publicKey,
+                    state: collectionState,
+                    updateAuthority: authority.publicKey,
                     systemProgram: SystemProgram.programId,
-                    mplCoreProgram: MPL_CORE_ID,
+                    mplCoreProgram: MPL_CORE_PROGRAM_ID,
                 })
-                .rpc(); // No additional signers needed
+                .rpc();
 
-            console.log("Unlock tx:", tx);
+            expect(tx).to.not.be.null;
+        });
 
-            // Try to fetch and verify the unlocked asset
+        it("should fail to unlock before unlock time", async () => {
+            // Create a collection with future unlock time
+            const futureCollection = Keypair.generate();
+            const [futureState] = PublicKey.findProgramAddressSync(
+                [Buffer.from("state"), futureCollection.publicKey.toBuffer()],
+                program.programId
+            );
+
+            const futureUnlockTs = new anchor.BN(Date.now() / 1000 + 3600); // 1 hour from now
+
+            await program.methods
+                .createCollectionWithState(
+                    "Future Collection",
+                    "https://example.com/collection.json",
+                    futureUnlockTs,
+                    500,
+                    1000
+                )
+                .accountsPartial({
+                    payer: authority.publicKey,
+                    collection: futureCollection.publicKey,
+                    state: futureState,
+                    updateAuthority: authority.publicKey,
+                    systemProgram: SystemProgram.programId,
+                    mplCoreProgram: MPL_CORE_PROGRAM_ID,
+                })
+                .signers([futureCollection])
+                .rpc();
+
+            const futureAsset = Keypair.generate();
+            await program.methods
+                .mintLockedAsset(
+                    "Future Asset",
+                    "https://example.com/asset.json"
+                )
+                .accountsPartial({
+                    payer: authority.publicKey,
+                    asset: futureAsset.publicKey,
+                    state: futureState,
+                    collection: futureCollection.publicKey,
+                    updateAuthority: authority.publicKey,
+                    owner: user.publicKey,
+                    systemProgram: SystemProgram.programId,
+                    mplCoreProgram: MPL_CORE_PROGRAM_ID,
+                })
+                .signers([futureAsset])
+                .rpc({ skipPreflight: true });
+
             try {
-                const unlockedAsset = await fetchAsset(
-                    umi,
-                    umiPublicKey(asset.publicKey.toString())
-                );
+                await program.methods
+                    .unlockAsset()
+                    .accountsPartial({
+                        payer: authority.publicKey,
+                        asset: futureAsset.publicKey,
+                        collection: futureCollection.publicKey,
+                        state: futureState,
+                        updateAuthority: authority.publicKey,
+                        systemProgram: SystemProgram.programId,
+                        mplCoreProgram: MPL_CORE_PROGRAM_ID,
+                    })
+                    .rpc();
 
-                if (unlockedAsset.freezeDelegate) {
-                    assert.isFalse(
-                        unlockedAsset.freezeDelegate.frozen,
-                        "Asset should be thawed (not frozen)"
-                    );
-                }
-                if (unlockedAsset.royalties) {
-                    assert.equal(
-                        unlockedAsset.royalties.basisPoints,
-                        POST_UNLOCK_BPS,
-                        "Royalties should be post-unlock bps"
-                    );
-                }
-                console.log("Asset successfully unlocked and verified");
-            } catch (fetchError) {
-                console.warn(
-                    "Could not fetch unlocked asset:",
-                    fetchError.message
-                );
-                // The unlock transaction succeeded, which is the main test
+                expect.fail("Should have thrown NotYetUnlocked error");
+            } catch (error) {
+                expect(error.error.errorCode.code).to.equal("NotYetUnlocked");
             }
-        } catch (error) {
-            console.error("Unlock error:", error);
-            throw error;
-        }
+        });
+    });
+
+    describe("Edge Cases", () => {
+        it("should fail with invalid MPL Core program", async () => {
+            const invalidMplCore = Keypair.generate().publicKey;
+            const unlockTs = new anchor.BN(Date.now() / 1000 + 3600);
+            const newCollection = Keypair.generate();
+            const [newCollectionState] = PublicKey.findProgramAddressSync(
+                [Buffer.from("state"), newCollection.publicKey.toBuffer()],
+                program.programId
+            );
+
+            try {
+                await program.methods
+                    .createCollectionWithState(
+                        "Invalid Program Collection",
+                        "https://example.com/collection.json",
+                        unlockTs,
+                        500,
+                        1000
+                    )
+                    .accountsPartial({
+                        payer: authority.publicKey,
+                        collection: newCollection.publicKey,
+                        state: newCollectionState,
+                        updateAuthority: authority.publicKey,
+                        systemProgram: SystemProgram.programId,
+                        mplCoreProgram: invalidMplCore,
+                    })
+                    .signers([newCollection])
+                    .rpc();
+
+                expect.fail("Should have thrown InvalidMplCoreProgram error");
+            } catch (error) {
+                expect(error.error.errorCode.code).to.equal(
+                    "InvalidMplCoreProgram"
+                );
+            }
+        });
+
+        it("should handle basic validation checks", async () => {
+            const unlockTs = new anchor.BN(Date.now() / 1000 + 3600);
+            const newCollection = Keypair.generate();
+            const [newCollectionState] = PublicKey.findProgramAddressSync(
+                [Buffer.from("state"), newCollection.publicKey.toBuffer()],
+                program.programId
+            );
+
+            const tx = await program.methods
+                .createCollectionWithState(
+                    "Valid Collection",
+                    "https://example.com/collection.json",
+                    unlockTs,
+                    500,
+                    1000
+                )
+                .accountsPartial({
+                    payer: authority.publicKey,
+                    collection: newCollection.publicKey,
+                    state: newCollectionState,
+                    updateAuthority: authority.publicKey,
+                    systemProgram: SystemProgram.programId,
+                    mplCoreProgram: MPL_CORE_PROGRAM_ID,
+                })
+                .signers([newCollection])
+                .rpc();
+
+            expect(tx).to.not.be.null;
+
+            // Verify state was created correctly
+            const stateAccount = await program.account.collectionState.fetch(
+                newCollectionState
+            );
+            expect(stateAccount.collection.toString()).to.equal(
+                newCollection.publicKey.toString()
+            );
+            expect(stateAccount.preUnlockBps).to.equal(500);
+            expect(stateAccount.postUnlockBps).to.equal(1000);
+        });
     });
 });

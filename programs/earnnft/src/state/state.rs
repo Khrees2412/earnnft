@@ -54,6 +54,7 @@ pub struct MintLockedAsset<'info> {
     pub state: Account<'info, CollectionState>,
 
     /// CHECK: The collection account is validated by the `state` PDA.
+    #[account(mut)]
     pub collection: UncheckedAccount<'info>,
 
     pub update_authority: Signer<'info>,
@@ -77,6 +78,7 @@ pub struct UnlockAsset<'info> {
     pub asset: UncheckedAccount<'info>,
 
     /// CHECK: The collection account is needed to derive and validate the state PDA.
+    #[account(mut)]
     pub collection: UncheckedAccount<'info>,
 
     #[account(

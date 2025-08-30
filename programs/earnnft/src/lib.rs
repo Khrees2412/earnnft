@@ -48,7 +48,7 @@ pub mod earnnft {
         let mut b = CreateCollectionV2CpiBuilder::new(&ctx.accounts.mpl_core_program);
         b.collection(&ctx.accounts.collection)
             .payer(&ctx.accounts.payer)
-            .update_authority(Some(&ctx.accounts.update_authority))
+            .update_authority(None)
             .system_program(&ctx.accounts.system_program)
             .name(name)
             .uri(uri)
@@ -101,7 +101,7 @@ pub mod earnnft {
             .collection(Some(&ctx.accounts.collection))
             .payer(&ctx.accounts.payer)
             .system_program(&ctx.accounts.system_program)
-            .update_authority(Some(&ctx.accounts.update_authority))
+            .update_authority(None)
             .owner(Some(&ctx.accounts.owner))
             .name(name)
             .uri(uri)
@@ -128,10 +128,10 @@ pub mod earnnft {
         // 1) Thaw the freeze plugin
         let mut up = UpdatePluginV1CpiBuilder::new(&ctx.accounts.mpl_core_program);
         up.asset(&ctx.accounts.asset)
-            .collection(None)
+            .collection(Some(&ctx.accounts.collection))
             .payer(&ctx.accounts.payer)
             .system_program(&ctx.accounts.system_program)
-            .authority(Some(&ctx.accounts.update_authority))
+            .authority(None)
             .plugin(Plugin::FreezeDelegate(FreezeDelegate { frozen: false }));
         up.invoke()?;
 
@@ -139,10 +139,10 @@ pub mod earnnft {
         let mut update_royalties = UpdatePluginV1CpiBuilder::new(&ctx.accounts.mpl_core_program);
         update_royalties
             .asset(&ctx.accounts.asset)
-            .collection(None)
+            .collection(Some(&ctx.accounts.collection))
             .payer(&ctx.accounts.payer)
             .system_program(&ctx.accounts.system_program)
-            .authority(Some(&ctx.accounts.update_authority))
+            .authority(None)
             .plugin(Plugin::Royalties(Royalties {
                 basis_points: ctx.accounts.state.post_unlock_bps,
                 creators: vec![Creator {
