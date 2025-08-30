@@ -1,4 +1,4 @@
-# EarnNFT Program - Simple Explanation
+# EarnNFT Program
 
 ## What is this program?
 

@@ -1,4 +1,3 @@
-use crate::errors::CustomError;
 use anchor_lang::prelude::*;
 
 #[account]
